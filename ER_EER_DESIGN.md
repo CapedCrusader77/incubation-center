@@ -1,241 +1,281 @@
-# University Innovation & Startup Incubation Management System
-## ER & EER Model Design, Relational Schema & Database Justification
+# Technical Design Document: University Incubation Management System
 
-**Project Topic**: University Innovation & Startup Incubation Management  
-**Selected Advanced Database**: **CockroachDB** (Distributed Relational SQL Engine)  
-**Architecture**: Distributed SQL Backend + Node.js/Express Serverless API + Vanilla Responsive SPA  
-
----
-
-## 1. Problem Statement Analysis
-
-A modern University Innovation and Startup Incubation Center manages a multi-stakeholder ecosystem:
-- **Entrepreneurs & Innovators**: Students, faculty, alumni, and industry members.
-- **Startups & Domains**: Ventures categorized into domains (AI, Healthcare, FinTech, AgriTech, Cybersecurity, Green Energy, Other).
-- **Incubation Lifecycle**: Progression through discrete stages (*ideation*, *validation*, *incubation*, *acceleration*, *commercialization*) with an immutable stage history audit log.
-- **Mentorship**: One-on-one and team guidance by academic and industry experts, including structured metric-driven evaluations (score 1–10).
-- **Investment & Pitches**: Investor pitching, scheduled meetings with status tracking (*Scheduled*, *Interested*, *Declined*, *Funded*), and equity/grant investment rounds.
-- **Innovation Programs & Events**: Workshops, hackathons, training, demo days, and networking with startup participation tracking.
-- **Intellectual Property & Grants**: Patents (Filed, Published, Granted), research publications (with DOI and citation venues), and government/industry grants.
+```
+Document ID : DBMS-EER-2026-01
+Topic       : University Innovation & Startup Incubation Management
+Database    : CockroachDB (Distributed SQL / PostgreSQL Wire Protocol)
+Backend     : Node.js / Express
+Frontend    : Vanilla HTML5 / CSS3 / JavaScript (SPA)
+Normal Form : Boyce-Codd Normal Form (BCNF)
+```
 
 ---
 
-## 2. Advanced Database Selection Justification: Why CockroachDB?
+## 1. System Requirements & Domain Scope
 
-The problem requires a **centralized, highly reliable database system** that guarantees **data integrity, minimizes redundancy**, and handles relational joins and audit trails.
+The system models the end-to-end lifecycle of university-affiliated ventures, from initial ideation through equity funding, mentorship, IP protection, and public programs.
 
-| Requirement | CockroachDB (Chosen) | MongoDB (Document) | Neo4j (Graph) | Apache Cassandra |
+```
+       [Entrepreneurs] ──(co-found)──> [Startups] <──(evaluations)── [Mentors]
+          (Student/                      │      │
+          Faculty/Alumni)                │      └──(participate)──> [Events]
+                                         │
+                                   [Investments] <──(fund)── [Investors]
+                                   [Patents/IP]
+                                   [Grants]
+```
+
+### Scope Boundaries
+1. **Founders & Affiliations**: Tracks university innovators across four defined groups: Student, Faculty, Alumni, and Industry. A person can co-found multiple startups, and a startup can have multiple founders with distinct roles (CEO, CTO, Lead Researcher).
+2. **Venture Progression**: Startups advance through five linear stages: `ideation` &rarr; `validation` &rarr; `incubation` &rarr; `acceleration` &rarr; `commercialization`. Every transition requires a non-null timestamp, reason/notes, and creates an audit record in `stage_history`.
+3. **Mentorship & Metric Evaluations**: Mentors are specialized personnel possessing domain expertise. Mentors conduct evaluations on defined metrics (e.g., *Product Readiness*, *Market Traction*, *Financial Health*) scored on an integer scale of 1 to 10.
+4. **Capital & Pitching**: Tracks angel and venture capital firms. Startups pitch to investors with tracked outcomes (`Scheduled`, `Interested`, `Declined`, `Funded`). Closed rounds capture investor identity, round stage (Seed, Pre-Series A), and capital amount.
+5. **Events & Intellectual Property**: Records incubation programs (workshops, hackathons, demo days) with attendance logs. Tracks research outputs (patents filed with application IDs, peer-reviewed publications with DOIs, and non-dilutive government grants).
+
+---
+
+## 2. Architecture Decision: Database Engine Selection
+
+### Decision
+Use **CockroachDB** as the primary storage engine.
+
+### Context & Evaluated Options
+
+| Evaluation Criterion | CockroachDB | MongoDB | Apache Cassandra | Neo4j |
 | :--- | :--- | :--- | :--- | :--- |
-| **Referential Integrity** | **Strict Foreign Keys with Cascades** | Manual application-level checks | Relationship properties, no declarative constraints | No foreign keys |
-| **ACID Guarantees** | **Full Distributed Serializable ACID (Raft consensus)** | Document-level atomicity; multi-doc is slower | ACID within single instance | Eventual consistency; write conflicts |
-| **Relational Joins** | **Native SQL joins (Hash, Merge, Lookup joins)** | Aggregation `$lookup` (inefficient at scale) | Cypher pattern match (great for paths, poor for tabular reports) | Joins unsupported; requires denormalization |
-| **Audit Trails & History** | **ACID Transactions (`BEGIN ... COMMIT`)** | Document versioning (prone to race conditions) | Graph revisioning | Append-only tables (risk of duplicate writes) |
-| **Horizontal Scalability** | **Auto-partitioning into 64MB Ranges with multi-region support** | Sharding with shard keys | Complex clustered setup | Native distributed ring |
-| **PostgreSQL Compatibility** | **PostgreSQL wire-protocol & standard SQL syntax** | Proprietary MQL | Cypher QL | CQL (limited SQL subset) |
+| **Data Model** | Distributed Relational | Document Store | Wide-Column Family | Property Graph |
+| **Transaction Isolation** | Serializable ACID (Raft) | Document-level | Tunable / Eventual | ACID (Single-Node) |
+| **Referential Integrity** | Enforced Foreign Keys (`CASCADE`) | Application-enforced | Unsupported | Graph edges (no cascade) |
+| **Aggregation Efficiency** | Native Cost-Based Optimizer | Pipeline aggregation | Inefficient without Spark | Cypher path traversal |
+| **Horizontal Scaling** | Range-based auto-rebalancing | Manual shard keys | Consistent hashing ring | Read replicas only |
+| **Wire Protocol** | PostgreSQL Standard | Custom BSON / Driver | CQL binary protocol | Bolt Protocol |
 
-### Key Reasons CockroachDB Was Selected:
-1. **Financial & Investment Integrity**: Multi-round investments and grants require strict transactional consistency where numbers must match without duplicate or ghost records.
-2. **Auditability for Stage Transitions**: Changing a startup's incubation stage is executed inside a database transaction (`BEGIN ... COMMIT`) that simultaneously updates the startup's current stage and appends an immutable entry to `stage_history`.
-3. **Complex Analytical Reporting**: Aggregations like total funding by startup, mentor caseloads, and average evaluation scores benefit from CockroachDB's distributed cost-based optimizer (CBO).
-4. **Cloud-Native Resilience**: Built on the Pebble storage engine and Raft consensus, CockroachDB survives node and region failures without manual failover.
+### Rationale
+- **Financial & Audit Accuracy**: Equity rounds, stage transitions, and patent tracking require strict referential integrity. An orphaned investment or founder record violates data invariants. CockroachDB guarantees atomicity through Raft consensus across write ranges.
+- **Relational Complexity**: The domain is fundamentally interconnected: founders link to people, mentors link to assignments, and investments link to investors. Graph databases excel at path-finding but underperform on standard tabular financial reports; document stores require unnormalized duplicate data.
+- **Transactional Stage History**: Progressing a startup's stage executes as a single serializable transaction:
+  ```sql
+  BEGIN;
+  UPDATE startups SET stage = 'acceleration' WHERE id = $1;
+  INSERT INTO stage_history (startup_id, stage, notes) VALUES ($1, 'acceleration', $2);
+  COMMIT;
+  ```
 
 ---
 
 ## 3. Entity-Relationship (ER) Model
 
-### Core Entities & Attributes:
-- **Startup** (`id`, `name`, `domain`, `description`, `stage`, `founded_on`, `created_at`)
-- **Person** (`id`, `name`, `email`, `affiliation`, `created_at`)
-- **Mentor** (`id`, `person_id`, `expertise`, `organization`)
-- **Investor** (`id`, `name`, `organization`, `email`)
-- **Event** (`id`, `title`, `event_type`, `starts_at`, `venue`, `description`)
-- **Evaluation** (`id`, `startup_id`, `mentor_id`, `metric`, `score`, `notes`, `evaluated_on`)
-- **Investment** (`id`, `startup_id`, `investor_id`, `round_name`, `amount`, `invested_on`)
-- **PitchMeeting** (`id`, `startup_id`, `investor_id`, `scheduled_at`, `outcome`, `notes`)
-- **Patent** (`id`, `startup_id`, `title`, `application_number`, `status`, `filed_on`)
-- **Publication** (`id`, `startup_id`, `title`, `venue`, `published_on`, `doi`)
-- **Grant** (`id`, `startup_id`, `provider`, `program`, `amount`, `awarded_on`)
-- **StageHistory** (`id`, `startup_id`, `stage`, `notes`, `changed_on`)
+### Entity Sets
 
-### Relationship Cardinalities:
-- `People` **1 — M** `Founders` **M — 1** `Startups` (Many-to-Many: Entrepreneurs co-founding ventures).
-- `People` **1 — (0..1)** `Mentors` (Specialization).
-- `Mentors` **M — N** `Startups` via `mentor_assignments` (Mentors assigned to multiple ventures).
-- `Startups` **1 — M** `Evaluations` (Periodic mentor reviews).
-- `Investors` **1 — M** `Investments` **M — 1** `Startups` (Funding rounds).
-- `Investors` **1 — M** `PitchMeetings` **M — 1** `Startups` (Pitch sessions).
-- `Events` **M — N** `Startups` via `event_attendance` (Event participation).
-- `Startups` **1 — M** `Patents` (IP filings).
-- `Startups` **1 — M** `Publications` (Research papers).
-- `Startups` **1 — M** `Grants` (Innovation funding).
+| Entity | Primary Key | Description |
+| :--- | :--- | :--- |
+| `STARTUP` | `id` (UUID) | Incubation venture, domain classification, current stage, founding date |
+| `PERSON` | `id` (UUID) | Individual identity, email, university/industry affiliation |
+| `MENTOR` | `id` (UUID) | Subject-matter specialist linked to a Person entity |
+| `INVESTOR` | `id` (UUID) | Institutional or angel funding entity |
+| `EVENT` | `id` (UUID) | Workshop, hackathon, demo day, or networking session |
+| `EVALUATION` | `id` (UUID) | Quantitative performance evaluation by a mentor (1–10 scale) |
+| `INVESTMENT` | `id` (UUID) | Closed funding round (round name, amount, date) |
+| `PITCH_MEETING` | `id` (UUID) | Assessment session between an investor and startup |
+| `STAGE_HISTORY` | `id` (UUID) | Immutable audit log of stage progressions |
+| `PATENT` | `id` (UUID) | Intellectual property filing (application number, status, filing date) |
+| `PUBLICATION` | `id` (UUID) | Research paper, conference venue, date, DOI |
+| `GRANT` | `id` (UUID) | Non-dilutive innovation grant awarded by a sponsor |
+
+### Relationship Sets
+
+- **Founders** (`STARTUP` &harr; `PERSON`): Many-to-Many ($M:N$). A person co-founds multiple startups; a startup has one or more founders. Descriptive attribute: `role`.
+- **Mentor_Assignments** (`STARTUP` &harr; `MENTOR`): Many-to-Many ($M:N$). Mentors advise multiple startups. Descriptive attribute: `assigned_on`.
+- **Event_Attendance** (`EVENT` &harr; `STARTUP`): Many-to-Many ($M:N$). Startups attend multiple programs.
+- **Startup_Evaluations** (`STARTUP` &larr; `EVALUATION`): One-to-Many ($1:N$). A startup has multiple reviews; each review belongs to one venture.
+- **Investor_Investments** (`INVESTOR` &larr; `INVESTMENT`): One-to-Many ($1:N$). An investor participates in multiple rounds.
 
 ```mermaid
 erDiagram
-    PEOPLE ||--o{ FOUNDERS : "co-founds"
-    STARTUPS ||--o{ FOUNDERS : "has"
-    PEOPLE ||--o| MENTORS : "specializes into"
-    MENTORS ||--o{ MENTOR_ASSIGNMENTS : "guides"
-    STARTUPS ||--o{ MENTOR_ASSIGNMENTS : "assigned to"
-    STARTUPS ||--o{ STAGE_HISTORY : "progresses through"
-    STARTUPS ||--o{ EVALUATIONS : "receives"
-    MENTORS ||--o{ EVALUATIONS : "conducts"
-    STARTUPS ||--o{ INVESTMENTS : "receives funding"
-    INVESTORS ||--o{ INVESTMENTS : "invests in"
-    STARTUPS ||--o{ PITCH_MEETINGS : "pitches at"
-    INVESTORS ||--o{ PITCH_MEETINGS : "evaluates"
-    EVENTS ||--o{ EVENT_ATTENDANCE : "hosts"
-    STARTUPS ||--o{ EVENT_ATTENDANCE : "participates in"
-    STARTUPS ||--o{ PATENTS : "owns"
-    STARTUPS ||--o{ PUBLICATIONS : "publishes"
-    STARTUPS ||--o{ GRANTS : "awarded"
+    PERSON ||--o{ FOUNDER : "acts as"
+    STARTUP ||--o{ FOUNDER : "co-founded by"
+
+    PERSON ||--o| MENTOR : "specializes as"
+    MENTOR ||--o{ MENTOR_ASSIGNMENT : "assigned to"
+    STARTUP ||--o{ MENTOR_ASSIGNMENT : "guided by"
+
+    STARTUP ||--o{ STAGE_HISTORY : "logs"
+    STARTUP ||--o{ EVALUATION : "reviewed in"
+    MENTOR ||--o{ EVALUATION : "evaluates"
+
+    STARTUP ||--o{ INVESTMENT : "receives"
+    INVESTOR ||--o{ INVESTMENT : "finances"
+
+    STARTUP ||--o{ PITCH_MEETING : "presents"
+    INVESTOR ||--o{ PITCH_MEETING : "hosts"
+
+    EVENT ||--o{ EVENT_ATTENDANCE : "schedules"
+    STARTUP ||--o{ EVENT_ATTENDANCE : "participates"
+
+    STARTUP ||--o{ PATENT : "files"
+    STARTUP ||--o{ PUBLICATION : "authors"
+    STARTUP ||--o{ GRANT : "awarded"
 ```
 
 ---
 
 ## 4. Enhanced Entity-Relationship (EER) Model
 
-The EER Model captures the **Specialization / Generalization** hierarchy of individuals participating in the incubation center:
+### Specialization / Generalization Hierarchy
 
-1. **Superclass: `Person`**
-   - Shared Attributes: `id` (UUID, PK), `name`, `email` (Unique), `created_at`.
-   - Disjoint Subclasses by Affiliation:
-     - `Student`: Current university scholars.
-     - `Faculty`: Academic researchers and professors.
-     - `Alumni`: University graduates turned entrepreneurs.
-     - `Industry`: External corporate partners and professionals.
-   - Constraint: **Total Specialization** (`affiliation IN ('Student','Faculty','Alumni','Industry')`).
+The EER schema implements **disjoint total specialization** on the `PERSON` superclass, alongside **optional role specialization** for mentors.
 
-2. **Role Specialization: `Mentor`**
-   - Inherits: Foreign key `person_id` referencing `people(id)` with a `UNIQUE` constraint.
-   - Subclass-Specific Attributes: `expertise`, `organization`.
-
-```mermaid
-classDiagram
-    class Person {
-        +UUID id [PK]
-        +TEXT name
-        +TEXT email [UNIQUE]
-        +TEXT affiliation [CHECK]
-        +TIMESTAMPTZ created_at
-    }
-
-    class Student {
-        Academic standing
-    }
-    class Faculty {
-        Department / Lab
-    }
-    class Alumni {
-        Graduation batch
-    }
-    class Industry {
-        External organization
-    }
-
-    class Mentor {
-        +UUID id [PK]
-        +UUID person_id [FK, UNIQUE]
-        +TEXT expertise
-        +TEXT organization
-    }
-
-    Person <|-- Student : specialization (disjoint)
-    Person <|-- Faculty : specialization (disjoint)
-    Person <|-- Alumni : specialization (disjoint)
-    Person <|-- Industry : specialization (disjoint)
-    Person <|-- Mentor : role specialization (0..1)
+```
+                         ┌──────────────┐
+                         │    PERSON    │
+                         └──────┬───────┘
+                                │
+                    ┌───────────┴───────────┐
+                    │ (d, t)                │ (o)
+              ┌─────┴─────┐           ┌─────┴─────┐
+              │Affiliation│           │   MENTOR  │
+              └─────┬─────┘           └───────────┘
+     ┌────────┬─────┴──────┬────────┐
+┌────┴────┐┌──┴────┐ ┌─────┴──┐ ┌───┴────┐
+│ Student ││Faculty│ │ Alumni │ │Industry│
+└─────────┘└───────┘ └────────┘ └────────┘
 ```
 
----
-
-## 5. Normalization Analysis (1NF to BCNF)
-
-All 15 tables in [`schema.sql`](schema.sql) satisfy **Boyce-Codd Normal Form (BCNF)**:
-
-1. **First Normal Form (1NF)**:
-   - All attributes contain only atomic, scalar values (no comma-separated lists or arrays).
-   - Each table has a defined Primary Key (`id` or composite PK).
-2. **Second Normal Form (2NF)**:
-   - All non-key attributes are fully functionally dependent on the entire primary key.
-   - Associative tables (`founders`, `mentor_assignments`, `event_attendance`) only maintain attributes dependent on the complete composite key (`role` depends on `(startup_id, person_id)`).
-3. **Third Normal Form (3NF)**:
-   - There are zero transitive dependencies ($X \to Y$ and $Y \to Z$). For example, mentor expertise is kept in `mentors`, not denormalized into `startups` or `evaluations`.
-4. **Boyce-Codd Normal Form (BCNF)**:
-   - For every non-trivial functional dependency $X \to Y$, $X$ is a superkey. All alternate candidate keys (`email`, `application_number`, `doi`) have explicit unique indexes.
+#### Constraints
+1. **Total Specialization on Affiliation**:
+   $$\bigcup (\text{Student}, \text{Faculty}, \text{Alumni}, \text{Industry}) = \text{Person}$$
+   Every record in `people` must belong to exactly one affiliation category. Enforced by:
+   `CHECK (affiliation IN ('Student', 'Faculty', 'Alumni', 'Industry'))`.
+2. **Disjointness Constraint ($d$)**:
+   $$\text{Student} \cap \text{Faculty} \cap \text{Alumni} \cap \text{Industry} = \emptyset$$
+   An individual holds a single primary affiliation identifier within the university registry.
+3. **Role Specialization (`Mentor`)**:
+   - A `Person` may optionally serve as a `Mentor` ($0..1$).
+   - Represented as a separate relation `mentors` with `person_id UUID UNIQUE REFERENCES people(id)`.
+   - Mentors inherit all generic personal attributes (`name`, `email`) while adding domain-specific fields (`expertise`, `organization`).
 
 ---
 
-## 6. Relational Schema & Constraints Table
+## 5. Relational Schema & Normalization
 
-| Table | Primary Key | Foreign Keys | Unique Keys | Check Constraints |
-| :--- | :--- | :--- | :--- | :--- |
-| `people` | `id` (UUID) | None | `email` | `affiliation IN ('Student','Faculty','Alumni','Industry')` |
-| `startups` | `id` (UUID) | None | `name` | `domain IN (...)`, `stage IN (...)` |
-| `founders` | `(startup_id, person_id)` | `startup_id` -> `startups(id)`, `person_id` -> `people(id)` | Composite PK | Role defaults to 'Founder' |
-| `mentors` | `id` (UUID) | `person_id` -> `people(id)` | `person_id` | Expertise not empty |
-| `mentor_assignments` | `(startup_id, mentor_id)` | `startup_id` -> `startups(id)`, `mentor_id` -> `mentors(id)` | Composite PK | `assigned_on` valid date |
-| `stage_history` | `id` (UUID) | `startup_id` -> `startups(id)` | None | `stage IN (...)` |
-| `evaluations` | `id` (UUID) | `startup_id` -> `startups(id)`, `mentor_id` -> `mentors(id)` | None | `score BETWEEN 1 AND 10` |
-| `investors` | `id` (UUID) | None | `name`, `email` | None |
-| `pitch_meetings` | `id` (UUID) | `startup_id` -> `startups(id)`, `investor_id` -> `investors(id)` | None | `outcome IN ('Scheduled','Interested','Declined','Funded')` |
-| `investments` | `id` (UUID) | `startup_id` -> `startups(id)`, `investor_id` -> `investors(id)` | `(startup_id, investor_id, round_name)` | `amount > 0` |
-| `events` | `id` (UUID) | None | None | `event_type IN ('Workshop','Hackathon','Training','Demo Day','Networking')` |
-| `event_attendance` | `(event_id, startup_id)` | `event_id` -> `events(id)`, `startup_id` -> `startups(id)` | Composite PK | None |
-| `patents` | `id` (UUID) | `startup_id` -> `startups(id)` | `application_number` | `status IN ('Filed','Published','Granted')` |
-| `publications` | `id` (UUID) | `startup_id` -> `startups(id)` | `doi` | None |
-| `grants` | `id` (UUID) | `startup_id` -> `startups(id)` | None | `amount > 0` |
+### Relational Schema Notation
+
+- `PEOPLE` ( <ins>id</ins>, name, email, affiliation, created_at )
+- `STARTUPS` ( <ins>id</ins>, name, domain, description, stage, founded_on, created_at )
+- `FOUNDERS` ( <ins>startup_id, person_id</ins>, role )
+- `MENTORS` ( <ins>id</ins>, person_id*, expertise, organization )
+- `MENTOR_ASSIGNMENTS` ( <ins>startup_id, mentor_id</ins>, assigned_on )
+- `STAGE_HISTORY` ( <ins>id</ins>, startup_id*, stage, changed_on, notes )
+- `EVALUATIONS` ( <ins>id</ins>, startup_id*, mentor_id*, metric, score, notes, evaluated_on )
+- `INVESTORS` ( <ins>id</ins>, name, organization, email )
+- `PITCH_MEETINGS` ( <ins>id</ins>, startup_id*, investor_id*, scheduled_at, outcome, notes )
+- `INVESTMENTS` ( <ins>id</ins>, startup_id*, investor_id*, round_name, amount, invested_on )
+- `EVENTS` ( <ins>id</ins>, title, event_type, starts_at, venue, description )
+- `EVENT_ATTENDANCE` ( <ins>event_id, startup_id</ins> )
+- `PATENTS` ( <ins>id</ins>, startup_id*, title, application_number, status, filed_on )
+- `PUBLICATIONS` ( <ins>id</ins>, startup_id*, title, venue, published_on, doi )
+- `GRANTS` ( <ins>id</ins>, startup_id*, provider, program, amount, awarded_on )
+
+*(Underline = Primary Key; Asterisk = Foreign Key)*
 
 ---
 
-## 7. Complex SQL Queries & Aggregations Demonstrated
+### Normalization Proof (1NF &rarr; BCNF)
 
-### Query 1: Total Funding & Rounds per Startup
+#### 1NF (Atomicity)
+- Every column holds atomic, non-divisible values.
+- Repeating groups (e.g. multiple founders, multiple investments) are decomposed into independent child relations (`founders`, `investments`) linked by foreign keys.
+
+#### 2NF (Full Functional Dependency)
+- Composite primary keys exist only in associative link tables:
+  - `founders(startup_id, person_id)`
+  - `mentor_assignments(startup_id, mentor_id)`
+  - `event_attendance(event_id, startup_id)`
+- In `founders`, non-key attribute `role` depends strictly on the joint participation $(startup\_id, person\_id)$, not on either key alone.
+- No partial functional dependency exists in any relation.
+
+#### 3NF (Transitive Dependencies)
+- No non-prime attribute determines another non-prime attribute ($X \to Y \to Z$).
+- Example: `evaluations` stores `mentor_id`, but does **not** store the mentor's name or organization. Mentor details resolve through `mentors` $\bowtie$ `people`.
+
+#### BCNF (Boyce-Codd Normal Form)
+- In every non-trivial functional dependency $X \to Y$, $X$ is a superkey:
+  - `people`: $\text{id} \to (\text{name}, \text{email}, \text{affiliation})$; alternate key: $\text{email} \to (\text{id}, \text{name}, \text{affiliation})$.
+  - `startups`: $\text{id} \to (\text{name}, \text{domain}, \dots)$; alternate key: $\text{name} \to (\text{id}, \text{domain}, \dots)$.
+  - `patents`: $\text{id} \to (\text{title}, \text{application\_number}, \dots)$; alternate key: $\text{application\_number} \to \text{all}$.
+  - `investments`: Unique constraint $(\text{startup\_id}, \text{investor\_id}, \text{round\_name})$ forms a candidate key.
+
+---
+
+## 6. Data Dictionary & Integrity Constraints
+
+| Table Name | Column | Data Type | Nullable | Constraints & References | Description |
+| :--- | :--- | :--- | :---: | :--- | :--- |
+| `people` | `id` | UUID | No | PK, `gen_random_uuid()` | Unique person identifier |
+| | `name` | TEXT | No | &mdash; | Full legal name |
+| | `email` | TEXT | No | UNIQUE | University or work email |
+| | `affiliation` | TEXT | No | `IN ('Student','Faculty','Alumni','Industry')` | Primary institutional role |
+| `startups` | `id` | UUID | No | PK, `gen_random_uuid()` | Unique startup identifier |
+| | `name` | TEXT | No | UNIQUE | Venture trading name |
+| | `domain` | TEXT | No | `IN ('Artificial Intelligence', ...)` | Innovation domain |
+| | `stage` | TEXT | No | `IN ('ideation', ...)` | Current incubation stage |
+| `founders` | `startup_id` | UUID | No | PK, FK &rarr; `startups(id) ON DELETE CASCADE` | Venture reference |
+| | `person_id` | UUID | No | PK, FK &rarr; `people(id)` | Founder reference |
+| | `role` | TEXT | No | Default: `'Founder'` | Organizational role |
+| `mentors` | `id` | UUID | No | PK, `gen_random_uuid()` | Unique mentor record ID |
+| | `person_id` | UUID | No | FK &rarr; `people(id)`, UNIQUE | Linked individual |
+| | `expertise` | TEXT | No | &mdash; | Core mentoring areas |
+| `evaluations`| `score` | INT | No | `CHECK (score BETWEEN 1 AND 10)` | Integer performance score |
+| `investments`| `amount` | DECIMAL(18,2)| No | `CHECK (amount > 0)` | Funding amount in INR |
+| | `round_name`| TEXT | No | Part of UNIQUE composite key | Seed, Pre-Series A, etc. |
+| `patents` | `status` | TEXT | No | `IN ('Filed','Published','Granted')` | Patent Office filing state |
+| `events` | `event_type` | TEXT | No | `IN ('Workshop','Hackathon', ...)` | Program classification |
+
+---
+
+## 7. Analytical Query Implementations
+
+### Portfolio Capital Aggregation
+Computes total capital raised and closed investment rounds per venture, including ventures with zero funding:
 ```sql
 SELECT 
     s.id,
     s.name,
     s.domain,
     s.stage,
-    COALESCE(SUM(i.amount), 0) AS total_investment,
+    COALESCE(SUM(i.amount), 0) AS total_funding,
     COUNT(i.id)::INT AS completed_rounds
 FROM startups s
 LEFT JOIN investments i ON i.startup_id = s.id
 GROUP BY s.id, s.name, s.domain, s.stage
-ORDER BY total_investment DESC, s.name;
+ORDER BY total_funding DESC, s.name;
 ```
 
-### Query 2: Mentor Caseload & Guidance Distribution
+### Mentor Caseload Analysis
+Tracks workload distribution across academic and industry advisors:
 ```sql
 SELECT 
     m.id,
     p.name AS mentor_name,
     m.expertise,
-    COUNT(a.startup_id)::INT AS assigned_startups
+    COUNT(a.startup_id)::INT AS active_startups
 FROM mentors m
 JOIN people p ON p.id = m.person_id
 LEFT JOIN mentor_assignments a ON a.mentor_id = m.id
 GROUP BY m.id, p.name, m.expertise
-ORDER BY assigned_startups DESC;
+ORDER BY active_startups DESC;
 ```
 
-### Query 3: Multi-Metric Performance Score Averages
+### Evaluation Metric Averages
+Calculates the mean score awarded per performance dimension:
 ```sql
 SELECT 
-    s.name AS startup,
+    s.name AS startup_name,
     e.metric,
     ROUND(AVG(e.score)::DECIMAL, 1) AS average_score,
-    COUNT(*)::INT AS review_count
+    COUNT(*)::INT AS total_evaluations
 FROM evaluations e
 JOIN startups s ON s.id = e.startup_id
 GROUP BY s.name, e.metric
 ORDER BY s.name, e.metric;
-```
-
-### Query 4: Transactional Incubation Stage Update & History Audit Log
-```sql
-BEGIN;
-UPDATE startups SET stage = 'acceleration' WHERE id = '8c3d8e5b-...' RETURNING *;
-INSERT INTO stage_history (startup_id, stage, notes) 
-VALUES ('8c3d8e5b-...', 'acceleration', 'Approved for accelerator after seed round');
-COMMIT;
 ```
