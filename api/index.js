@@ -1,6 +1,4 @@
-const { getApp } = require('../server');
+const express = require('express');
+const app = require('../index');
 
-module.exports = async (req, res) => {
-  const app = await getApp();
-  return app(req, res);
-};
+module.exports = app;

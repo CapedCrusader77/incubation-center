@@ -2,11 +2,10 @@
   "name": "incubation-center",
   "version": "1.0.0",
   "description": "University Innovation & Startup Incubation Center",
-  "main": "server.js",
+  "main": "index.js",
   "scripts": {
     "test": "node --test tests/*.test.js",
-    "start": "node server.js",
-    "build": "node -e \"console.log('Build completed')\""
+    "start": "node server.js"
   },
   "keywords": [
     "incubation-center",
