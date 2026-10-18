@@ -22,6 +22,17 @@ A full-stack demonstration using **CockroachDB**, Node.js/Express, and a respons
 
 For another instance, set `DATABASE_URL=postgresql://root@127.0.0.1:26257/incubation?sslmode=disable` (or a secure cluster URL). Set `PORT` to change the web port. The insecure mode above is strictly for localhost demonstration; use TLS, credentials, and application authorization for any deployment with real user data. Data lives in `cockroach-data` unless you change `--store`.
 
+## Deploy to Vercel
+
+1. Push this repository to GitHub/GitLab.
+2. In the [Vercel Dashboard](https://vercel.com), import the repository.
+3. In **Settings > Environment Variables**, add your cloud database connection string:
+   - **Key**: `DATABASE_URL`
+   - **Value**: Connection string for your cloud database (e.g. CockroachDB Cloud Serverless, Neon, or Supabase).
+     - Example: `postgresql://username:password@free-tier14.aws-us-east-1.cockroachlabs.cloud:26257/defaultdb?sslmode=verify-full`
+4. Click **Deploy**. Vercel will automatically serve the static frontend from `public/` and route `/api/*` to the Serverless Function in `api/index.js`.
+5. Database migrations and initial seed records run automatically on the first request.
+
 ## Modules
 
 - Startup portfolio: domain/stage filtering, search, startup profiles, and stage changes with audit history.

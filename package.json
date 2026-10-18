@@ -1,13 +1,19 @@
 {
   "name": "incubation-center",
   "version": "1.0.0",
-  "description": "",
-  "main": "index.js",
+  "description": "University Innovation & Startup Incubation Center",
+  "main": "server.js",
   "scripts": {
     "test": "node --test tests/*.test.js",
-    "start": "node server.js"
+    "start": "node server.js",
+    "build": "node -e \"console.log('Build completed')\""
   },
-  "keywords": [],
+  "keywords": [
+    "incubation-center",
+    "cockroachdb",
+    "postgresql",
+    "express"
+  ],
   "author": "",
   "license": "ISC",
   "type": "commonjs",

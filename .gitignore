@@ -2,3 +2,4 @@ node_modules/
 cockroach-data/
 .env
 public.zip
+bin/
