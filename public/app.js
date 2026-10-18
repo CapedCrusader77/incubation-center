@@ -5,7 +5,7 @@ const money=n=>'₹'+fmt(n);
 const stages=['ideation','validation','incubation','acceleration','commercialization'];
 const domains=['Artificial Intelligence','Healthcare','FinTech','AgriTech','Cybersecurity','Green Energy','Other'];
 const state={view:'overview',detail:null,tab:{people:'people',funding:'investments',programs:'events',research:'patents'},search:'',domain:'',stage:''};
-async function api(url,options={}){const r=await fetch('/api'+url,{headers:{'Content-Type':'application/json'},...options});const data=await r.json();if(!r.ok)throw Error(data.error||'Request failed');return data;}
+async function api(url,options={}){const r=await fetch('/api'+url,{headers:{'Content-Type':'application/json'},...options});const text=await r.text();let data;try{data=JSON.parse(text);}catch(_e){throw Error(r.status===404?'API route not found (404)':`Server error (${r.status}): ${text.slice(0,100)}`);}if(!r.ok)throw Error(data.error||'Request failed');return data;}
 function notify(text,error=false){const el=$('#notice');el.textContent=text;el.className=error?'error':'';setTimeout(()=>{if(el.textContent===text)el.textContent='';},5000);}
 function pill(v){return `<span class="pill ${esc(v)}">${esc(v)}</span>`;}
 function section(title,subtitle='',action=''){return `<div class="section-title"><div><h2>${title}</h2>${subtitle?`<p>${subtitle}</p>`:''}</div>${action}</div>`;}
