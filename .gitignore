@@ -1,5 +1,7 @@
 node_modules/
 cockroach-data/
 .env
+.env.*
+!.env.example
 public.zip
 bin/
